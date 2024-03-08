@@ -49,7 +49,7 @@ def data_collection(v_path_list):
     bitrate_df = pd.DataFrame(data_frame, columns=[
         'id', 'raw_bitrate', 'compressed_bitrate', 'num_byte_files', 'time_transcode'
     ])
-    bitrate_df.to_csv(out_csv_path, index=False)
+    bitrate_df.to_csv(out_csv_path, encoding='utf-8', index=False)
 
     json_file.close()
 
