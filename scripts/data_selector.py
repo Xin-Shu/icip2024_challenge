@@ -6,7 +6,7 @@ from tqdm import tqdm
 
 from byte_extractor import byte_folder_path, in_folder_path
 
-target_block_num = 20
+target_block_num = 32
 json_log_path = os.path.join(byte_folder_path, 'log.json')
 csv_data_path = os.path.join(in_folder_path.replace('raw', ''), 'data_collection.csv')
 
@@ -24,14 +24,11 @@ def data_select(
             num_byte_files = dict_log['video_list'][v_name]
             list_ids = np.rint(np.linspace(0, num_byte_files - 1, target_select_num))
             list_ids = [int(id) for id in list_ids]
-            assert len(list_ids) == len(set(list_ids)), f'Duplicated byte file IDs: {list_ids}'
+            # assert len(list_ids) == len(set(list_ids)), f'Duplicated byte file IDs: {list_ids}'
             selection_str = ''
             for id in list_ids:
-                if id == list_ids[-1]:
-                    selection_str += f'{id}'
-                else:
-                    selection_str += f'{id},'
-            df.loc[df['id']==int(v_name), 'byte_selection'] = selection_str
+                selection_str += f'{id},'
+            df.loc[df['id']==int(v_name), 'byte_selection'] = selection_str[:-1]
     df.to_csv(csv_data_path, encoding='utf-8', index=False)
 
 

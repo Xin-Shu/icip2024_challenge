@@ -1,4 +1,5 @@
 import os
+import sys
 import json 
 import numpy as np
 import pandas as pd
@@ -7,7 +8,7 @@ import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 
 import tensorflow as tf
-import tensorflow_datasets as tfds
+import tensorflow.data as data
 from tensorflow import keras
 from tensorflow.keras import layers
 from sklearn import utils
@@ -70,7 +71,7 @@ class DataLoader:
         assert len(ytrain) + len(yvalid) == len(_df_), f'Error while spliting data: {len(ytrain)}, {len(yvalid)}'
         
         return (
-            xtrain, ytrain, xvalid, yvalid
+            np.array(xtrain), np.array(ytrain), np.array(xvalid), np.array(yvalid)
         )
     
     def img_loader(self, vid, list_byte_ids):
@@ -80,8 +81,8 @@ class DataLoader:
                 self.byte_folder_path, str(vid), f'{vid}-b{int(id):04d}.npy'
             )
             assert os.path.exists(byte_file_path), f'Byte file not found: {byte_file_path}'
-            byte_blocks.append(tf.convert_to_tensor(np.load(byte_file_path)))
-        return byte_blocks
+            byte_blocks.append(np.load(byte_file_path))
+        return np.array(byte_blocks)
 
 
 class DataTrainer:
@@ -90,49 +91,130 @@ class DataTrainer:
             data_set,
             out_folder_path,
             out_model_name,
+            batch_size,
+            num_blocks,
         ) -> None:
         self.xtrain, self.ytrain, self.xvalid, self.yvalid = data_set
         self.out_folder_path = out_folder_path
-        self.model_save_path = os.path.join(out_folder_path, out_model_name)
-        if not os.path.isdir(self.model_save_path):
-            os.mkdir(self.model_save_path)
+        self.batch_size = batch_size
+        self.num_blocks = num_blocks
+        self.out_model_name = out_model_name
+        self.model_save_folder = os.path.join(out_folder_path, out_model_name)
+        if not os.path.isdir(self.model_save_folder):
+            os.mkdir(self.model_save_folder)
     
-    def get_model_structure(self, input_shape):
+    def get_model_structure(self, block_width):
 
-        block_cnn_layers = []
-        for block in input_shape[0]:
-            inputs = keras.Input(shape=input_shape[1:])
-            x1 = layers.conv2d()
+        block_enc_layers = []
+        inputs = keras.Input(shape=(self.num_blocks, block_width, block_width, 1))
+        for block in range(self.num_blocks):
+            input_slice = inputs[:, block, :, :, :]
+            x1 = layers.Conv2D(
+                4, (3, 3), padding='same', strides=(4, 4), activation='relu'
+            )(input_slice)
+            x2 = layers.Conv2D(
+                16, (3, 3), padding='same', strides=(4, 4), activation='relu'
+            )(x1)
+            x3 = layers.Conv2D(
+                64, (3, 3), padding='same', strides=(4, 4), activation='relu'
+            )(x2)
+            x4 = layers.Conv2D(
+                128, (3, 3), padding='same', strides=(2, 2), activation='relu'
+            )(x3)
+            block_enc_layers.append(x4)
+        y1 = layers.concatenate(block_enc_layers)
+        y1 = layers.Flatten()(y1)
 
-    def compile_train(self):
-        pass
+        y2 = layers.Dense(1024)(y1)
+        y2 = layers.Dropout(0.3)(y2)
 
-    def save_train_history_to_json(self):
-        json_history_path = os.path.join(self.model_save_path, 'history.json')
+        y3 = layers.Dense(256)(y2)
+        y3 = layers.Dropout(0.3)(y3)
+
+        y4 = layers.Dense(64)(y3)
+        y4 = layers.Dropout(0.3)(y4)
+        
+        outputs = layers.Dense(1)(y4)
+        model = keras.Model(inputs=inputs, outputs=outputs)
+        return model
+
+    def compile_train(self, epochs):
+        block_width = int(self.batch_size ** 0.5)
+        train_set = data.Dataset.from_tensor_slices((self.xtrain, self.ytrain)).batch(block_width)
+        valid_set = data.Dataset.from_tensor_slices((self.xvalid, self.yvalid)).batch(block_width)
+
+        model = self.get_model_structure(block_width)
+        model.summary()
+        optimizer = tf.keras.optimizers.Adam()
+        model.compile(
+            optimizer=optimizer,
+            loss=[tf.keras.losses.MeanAbsoluteError(), tf.keras.losses.MeanSquaredError()]
+        )
+        save_best_model = SaveBestModel()
+        history = model.fit(
+            train_set, epochs=epochs, validation_data=valid_set, callbacks=[save_best_model]
+        )
+        model.set_weights(save_best_model.best_weights)
+        self.save_train_history_to_json(history)
+        self.save_model_to_disk(model)
+
+    def save_train_history_to_json(self, history):
+        json_history_path = os.path.join(self.model_save_folder, 'history.json')
         with open(json_history_path, 'w') as json_file:
-            json.dump(self.history.history, json_file, indent=2)
+            json.dump(history.history, json_file, indent=2)
         print(f"INFO: Saved trainig history to history.json.")
-
-
+    
     def save_model_to_disk(self, model):
         model_json = model.to_json()
-        with open(f"{self.out_model_name}.json", "w") as json_file:
+        json_model_path = os.path.join(self.model_save_folder, f'{self.out_model_name}.json')
+        h5_model_path = os.path.join(self.model_save_folder, f'{self.out_model_name}.h5')
+        with open(json_model_path, "w") as json_file:
             json_file.write(model_json)
-        model.save_weights(f"{self.out_model_name}.h5")
-        print(f"INFO: Saved model to {self.out_model_name}.json and weights to {self.out_model_name}.h5")
+        model.save_weights(json_model_path)
+        print(f'INFO: Saved model to {json_model_path} and weights to {h5_model_path}')
+
+
+class SaveBestModel(tf.keras.callbacks.Callback):
+    def __init__(self, save_best_metric='val_loss', this_max=False):
+        self.save_best_metric = save_best_metric
+        self.max = this_max
+        if this_max:
+            self.best = float('-inf')
+        else:
+            self.best = float('inf')
+
+    def on_epoch_end(self, epoch, logs=None):
+        metric_value = logs[self.save_best_metric]
+        if self.max:
+            if metric_value > self.best:
+                self.best = metric_value
+                self.best_weights = self.model.get_weights()
+
+        else:
+            if metric_value < self.best:
+                self.best = metric_value
+                self.best_weights= self.model.get_weights()
 
 
 def main():
 
     print('\n\n\nINFO: Initiating programm ...')
-    tester = DataLoader(
+    loader = DataLoader(
         byte_folder_path=byte_folder_path,
         csv_data_path=csv_data_path,
         num_blocks=target_block_num,
         batch_size=batch_size,
-        train_set_ratio=0.7
+        train_set_ratio=0.8
     )
-    data_set = tester.loader()
+    data_set = loader.loader()
+    trainer = DataTrainer(
+        data_set,
+        'model/',
+        'first_attempt',
+        batch_size,
+        target_block_num,
+    )
+    trainer.compile_train(epochs=500)
 
 if __name__ == '__main__':
     main()
