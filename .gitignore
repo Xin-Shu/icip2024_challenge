@@ -2,7 +2,8 @@
 .npy
 .txt
 .zip
-.ipynb
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
 Inter4K/*
 Inter4K
 inter4k_vid/*
