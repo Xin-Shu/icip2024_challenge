@@ -3,6 +3,8 @@
 *.txt
 *.zip
 *.ipynb
+*test*
+
 Inter4K/*
 Inter4K
 inter4k_vid/*
@@ -10,4 +12,3 @@ inter4k_vid
 scripts/model
 scripts/model/*
 inter4KUHD
-test*
