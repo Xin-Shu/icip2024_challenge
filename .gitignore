@@ -2,13 +2,11 @@
 *.npy
 *.txt
 *.zip
-*.ipynb
-*test*
-
 Inter4K/*
 Inter4K
 inter4k_vid/*
 inter4k_vid
 scripts/model
 scripts/model/*
+scripts/*.ipynb
 inter4KUHD
