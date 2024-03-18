@@ -1,5 +1,11 @@
 *.mp4
 *.npy
 *.txt
+*.zip
 Inter4K/*
+Inter4K
 inter4k_vid/*
+inter4k_vid
+scripts/model
+scripts/model/*
+inter4KUHD

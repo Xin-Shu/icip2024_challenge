@@ -6,8 +6,6 @@ import pandas as pd
 from ffmpeg import probe
 from tqdm import tqdm 
 
-from multiprocessing.pool import Pool
-
 from transcoder import out_folder_path
 from byte_extractor import in_folder_path, byte_folder_path
 
@@ -15,7 +13,7 @@ from byte_extractor import in_folder_path, byte_folder_path
 def get_v_bitrate(v_path):
     probe_ = probe(v_path)
     video_bitrate = next(s for s in probe_['streams'] if s['codec_type'] == 'video')
-    bitrate = video_bitrate['bit_rate']
+    bitrate = float(video_bitrate['bit_rate']) / 1000
     return bitrate
 
 def get_num_byte_files(v_name, json_content):

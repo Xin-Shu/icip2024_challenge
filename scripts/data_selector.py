@@ -6,7 +6,7 @@ from tqdm import tqdm
 
 from byte_extractor import byte_folder_path, in_folder_path
 
-target_block_num = 32
+target_block_num = 20
 json_log_path = os.path.join(byte_folder_path, 'log.json')
 csv_data_path = os.path.join(in_folder_path.replace('raw', ''), 'data_collection.csv')
 

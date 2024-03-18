@@ -4,21 +4,21 @@ import json
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 
 import tensorflow as tf
-import tensorflow.data as data
+from keras import layers
 from tensorflow import keras
-from tensorflow.keras import layers
-from sklearn import utils
-from sklearn import metrics
-from sklearn.model_selection import train_test_split
-os.environ["CUDA_VISIBLE_DEVICES"]= "1"
+from tensorflow import data as data
 
 from data_selector import csv_data_path, target_block_num
 from byte_extractor import home, in_folder_path, byte_folder_path, header_size, batch_size
 
+# os.environ["CUDA_VISIBLE_DEVICES"]= "1"
+model_name = 'compress_the_one'
+model_save_path = 'model/'
+num_epochs = 500
+split_ratio = 0.95
 
 class DataLoader:
 
@@ -51,7 +51,7 @@ class DataLoader:
         mid_court = int(len(_df_) * self.train_set_ratio)
         for i in tqdm(range(0, mid_court), ascii=True, desc='Loading train_set'):
             vid = _df_.loc[i, 'id']
-            target_bitrate = _df_.loc[i, 'compressed_bitrate']
+            target_bitrate = _df_.loc[i, 'compressed_bitrate'] / _df_.loc[i, 'raw_bitrate']
             byte_ids = _df_.loc[i, 'byte_selection'].split(',')
             assert len(byte_ids)== self.num_blocks, f'Wrong number of byte_ids: {vid}'
             byte_img_tensor = self.img_loader(vid, byte_ids)
@@ -60,7 +60,7 @@ class DataLoader:
             ytrain.append(target_bitrate)
         for i in tqdm(range(mid_court, len(_df_)), ascii=True, desc='Loading valid_set'):
             vid = _df_.loc[i, 'id']
-            target_bitrate = _df_.loc[i, 'compressed_bitrate']
+            target_bitrate = _df_.loc[i, 'compressed_bitrate'] / _df_.loc[i, 'raw_bitrate']
             byte_ids = _df_.loc[i, 'byte_selection'].split(',')
             assert len(byte_ids)== self.num_blocks, f'Wrong number of byte_ids: {vid}'
             byte_img_tensor = self.img_loader(vid, byte_ids)
@@ -109,32 +109,35 @@ class DataTrainer:
         inputs = keras.Input(shape=(self.num_blocks, block_width, block_width, 1))
         for block in range(self.num_blocks):
             input_slice = inputs[:, block, :, :, :]
-            x1 = layers.Conv2D(
-                4, (3, 3), padding='same', strides=(4, 4), activation='relu'
-            )(input_slice)
-            x2 = layers.Conv2D(
-                16, (3, 3), padding='same', strides=(4, 4), activation='relu'
-            )(x1)
-            x3 = layers.Conv2D(
-                64, (3, 3), padding='same', strides=(4, 4), activation='relu'
-            )(x2)
-            x4 = layers.Conv2D(
-                128, (3, 3), padding='same', strides=(2, 2), activation='relu'
-            )(x3)
-            block_enc_layers.append(x4)
-        y1 = layers.concatenate(block_enc_layers)
-        y1 = layers.Flatten()(y1)
+            
+            x = layers.Conv2D(4, (5, 5), padding='same', activation='relu')(input_slice)
+            x = layers.BatchNormalization()(x)
+            x = layers.MaxPooling2D(pool_size=(4, 4))(x)
 
-        y2 = layers.Dense(1024)(y1)
-        y2 = layers.Dropout(0.3)(y2)
+            x = layers.Conv2D(8, (5, 5), padding='same', activation='relu')(x)
+            x = layers.BatchNormalization()(x)
+            x = layers.MaxPooling2D(pool_size=(4, 4))(x)
 
-        y3 = layers.Dense(256)(y2)
-        y3 = layers.Dropout(0.3)(y3)
+            x = layers.Conv2D(16, (5, 5), padding='same', activation='relu')(x)
+            x = layers.BatchNormalization()(x)
+            x = layers.MaxPooling2D(pool_size=(4, 4))(x)
 
-        y4 = layers.Dense(64)(y3)
-        y4 = layers.Dropout(0.3)(y4)
-        
-        outputs = layers.Dense(1)(y4)
+            x = layers.Conv2D(32, (5, 5), padding='same', activation='relu')(x)
+            x = layers.BatchNormalization()(x)
+            x_out = layers.MaxPooling2D(pool_size=(2, 2))(x)
+            block_enc_layers.append(x_out)
+        y = layers.concatenate(block_enc_layers)
+        y = layers.Flatten()(y)
+
+        y = layers.Dense(256, activation='relu')(y)
+        y = layers.BatchNormalization()(y)
+        y = layers.Dropout(0.2)(y)
+
+        y = layers.Dense(128, activation='relu')(y)
+        y = layers.BatchNormalization()(y)
+        y = layers.Dropout(0.2)(y)
+
+        outputs = layers.Dense(1)(y)
         model = keras.Model(inputs=inputs, outputs=outputs)
         return model
 
@@ -143,12 +146,15 @@ class DataTrainer:
         train_set = data.Dataset.from_tensor_slices((self.xtrain, self.ytrain)).batch(block_width)
         valid_set = data.Dataset.from_tensor_slices((self.xvalid, self.yvalid)).batch(block_width)
 
+        # strategy = tf.distribute.MirroredStrategy()
+        # print('INFO: Number of devices: {}'.format(strategy.num_replicas_in_sync))
+        # with strategy.scope():
         model = self.get_model_structure(block_width)
         model.summary()
         optimizer = tf.keras.optimizers.Adam()
         model.compile(
             optimizer=optimizer,
-            loss=[tf.keras.losses.MeanAbsoluteError(), tf.keras.losses.MeanSquaredError()]
+            loss=tf.keras.losses.MeanAbsoluteError()
         )
         save_best_model = SaveBestModel()
         history = model.fit(
@@ -167,11 +173,14 @@ class DataTrainer:
     def save_model_to_disk(self, model):
         model_json = model.to_json()
         json_model_path = os.path.join(self.model_save_folder, f'{self.out_model_name}.json')
+        keras_model_path = os.path.join(self.model_save_folder, f'{self.out_model_name}.keras')
         h5_model_path = os.path.join(self.model_save_folder, f'{self.out_model_name}.h5')
+
         with open(json_model_path, "w") as json_file:
-            json_file.write(model_json)
-        model.save_weights(json_model_path)
-        print(f'INFO: Saved model to {json_model_path} and weights to {h5_model_path}')
+            json.dump(model_json, json_file, indent=2)
+        model.save(keras_model_path)
+        model.save_weights(h5_model_path)
+        print(f'INFO: Saved model_struct to {json_model_path} and entir_model to {keras_model_path}')
 
 
 class SaveBestModel(tf.keras.callbacks.Callback):
@@ -204,17 +213,19 @@ def main():
         csv_data_path=csv_data_path,
         num_blocks=target_block_num,
         batch_size=batch_size,
-        train_set_ratio=0.8
+        train_set_ratio=split_ratio,
+        if_shuffle=True,
+        random_seed=24
     )
     data_set = loader.loader()
     trainer = DataTrainer(
         data_set,
         'model/',
-        'first_attempt',
+        model_name,
         batch_size,
         target_block_num,
     )
-    trainer.compile_train(epochs=500)
+    trainer.compile_train(epochs=num_epochs)
 
 if __name__ == '__main__':
     main()
